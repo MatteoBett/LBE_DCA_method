@@ -59,11 +59,11 @@ class DatasetDCA(Dataset):
         """
 
         self.params = {
-            "fields" : torch.zeros((self.nnuc, self.nval), device=device, dtype=self.dtype ),
-            "couplings": torch.zeros((self.nnuc, self.nval, self.nnuc, self.nval), device=device, dtype=self.dtype ),
+            "fields" : torch.zeros((self.nnuc, self.nval), device=device, dtype=self.dtype),
+            "couplings": torch.zeros((self.nnuc, self.nval, self.nnuc, self.nval), device=device, dtype=self.dtype),
             "gaps_bias": torch.zeros((self.nnuc, 1), device=device, dtype=self.dtype),
-            "gaps_lr" : torch.tensor([0.00001], device=device, dtype=self.dtype ),
-            "all_params" : torch.zeros((self.nnuc, 1), device=device, dtype=self.dtype )
+            "gaps_lr" : torch.tensor([0.001], device=device, dtype=self.dtype),
+            "all_params" : torch.zeros((self.nnuc, 1), device=device, dtype=self.dtype)
         }
 
         self.mask = torch.ones(size=(self.nnuc, self.nval, self.nnuc, self.nval), dtype=torch.bool, device=device)

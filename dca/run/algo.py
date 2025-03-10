@@ -70,11 +70,29 @@ def update_params(fi: torch.Tensor,
             if key == "gaps_bias" or key == "gaps_lr" or key == "all_params":
                 continue
             params[key] += lr * grad[key]
-        params["couplings"] *= mask # Remove autocorrelations
         params["fields"][:, 0] += params["gaps_bias"][:, 0]
-        params["gaps_lr"] = params["gaps_lr"]*(1-0.0033)
+        if params["gaps_lr"] > 0.00001:
+            params["gaps_lr"] = params["gaps_lr"]*0.95
         params["all_params"][:, 0] += params["gaps_bias"][:, 0] 
 
+    return params
+
+
+def compute_gap_gradient(target_dist : torch.Tensor,
+                         dist_sample : torch.Tensor,
+                         params : Dict[str, torch.Tensor],
+                         device : str = 'cuda:0'
+                         ) -> Dict[str, torch.Tensor]:
+    """
+    Computes the gradient of the bias applied to the gaps frequency and adjust it 
+    toward a target distribution of gaps corresponding to a mean frequency of gaps in the sequence.
+    """ 
+    target_dist = target_dist.to(device=device)
+    dist_sample = dist_sample.to(device=device)
+    loss = target_dist - dist_sample
+
+    new_bias = params["gaps_lr"] * loss # positive result
+    params["gaps_bias"][:, 0] += new_bias[:, 0]
     return params
 
 
@@ -82,12 +100,16 @@ def update_params(fi: torch.Tensor,
 
 def gibbs_sampling(chains : torch.Tensor, 
                    params : Dict[str, torch.Tensor], 
+                   gaps_target_dist : torch.Tensor | None = None,
+                   bias_flag : bool | None = False,
                    nsweeps : int = 10,
                    beta : float = 1.0):
     
     nseq, nnuc, nval = chains.shape
     for _ in torch.arange(nsweeps):
         residue_idxs = torch.randperm(nnuc)
+        alloc_bias = torch.zeros((nnuc, 1), device='cuda:0')
+
         for i in residue_idxs:
             couplings_residue = params["couplings"][i].view(nval, nnuc * nval)
             
@@ -97,7 +119,16 @@ def gibbs_sampling(chains : torch.Tensor,
             sampled = torch.multinomial(make_proba, 1)
             chains[:, i, :] = loader.one_hot(sampled, device=chains.device, num_classes=nval).to(logit_residue.dtype).squeeze(1)
 
-    return chains
+            alloc_bias[i] = make_proba[:, 0].mean()
+        
+        if bias_flag:
+            params = compute_gap_gradient(
+            target_dist=gaps_target_dist,
+            dist_sample=alloc_bias,
+            params=params
+        )
+        
+    return chains, params
 
 
 @torch.jit.script
@@ -160,13 +191,13 @@ def compute_mixing_time(
         # Set the seed to i
         torch.manual_seed(i)
         # Perform a sweep on sample_t
-        sample_t = algo.gibbs_sampling(chains=sample_t, params=params, nsweeps=1, beta=beta)
+        sample_t, params = algo.gibbs_sampling(chains=sample_t, params=params, nsweeps=1, beta=beta)
 
         if i % 2 == 0:
             # Set the seed to i/2
             torch.manual_seed(i // 2)
             # Perform a sweep on sample_t_half
-            sample_t_half = algo.gibbs_sampling(chains=sample_t_half, params=params, nsweeps=1, beta=beta)
+            sample_t_half, params = algo.gibbs_sampling(chains=sample_t_half, params=params, nsweeps=1, beta=beta)
 
             # Calculate the average distance between sample_t and itself shuffled
             perm = torch.randperm(len(sample_t))

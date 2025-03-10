@@ -25,7 +25,7 @@ if __name__ == "__main__":
     model_type = "eaDCA"
     alphabet = "-AUCG"
     target_pearson = 0.95
-    target_gap_fraction = 0.2
+    target_gap_fraction = 0.15
 
     do_one = True
     plotting = True
@@ -58,7 +58,9 @@ if __name__ == "__main__":
             main_DCA.main(infile_path=infile_path,
                             chains_file=chain_file, 
                             params_file=params_dca,
-                            target_pearson=target_pearson)
+                            target_pearson=target_pearson,
+                            gaps_fraction=target_gap_fraction,
+                            bias_flag=bias)
         
         if sampling:
             sample.main(infile_path=infile_path, 
