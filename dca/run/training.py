@@ -18,29 +18,14 @@ import dca.stats.metrics as metrics
 import dca.run.algo as algo
 import dca.tools.utils as utils
 
-def halt_condition(epochs : int, 
-                   pearson : float, 
-                   slope : float, 
-                   target_pearson : float, 
-                   check_slope : bool = False, 
-                   max_epochs : int = 500
-                   ) -> bool:
-    c1 = pearson < target_pearson
-    c2 = epochs < max_epochs
-    if check_slope:
-        c3 = abs(slope - 1.) > 0.1
-    else:
-        c3 = False
-    return not c2 * ((not c1) * c3 + c1)
-
-
 def train_graph(chains : torch.Tensor,
                 dataset : loader.DatasetDCA,
                 f_single : torch.Tensor,
                 f_double : torch.Tensor,
                 target_pearson : float,
                 log_weights : torch.Tensor,
-                progress_bar : bool = True
+                progress_bar : bool = True,
+                max_epochs : int = 50
                 ):
     
     device = f_single.device
@@ -52,7 +37,7 @@ def train_graph(chains : torch.Tensor,
     log_likelihood = metrics.compute_log_likelihood(fi=f_single, fij=f_double, params=dataset.params, logZ=logZ) 
 
     p_single, p_double = algo.calc_freq(chains)
-    pearson, slope = algo.two_points_correlation(fij=f_double,pij=p_double,fi=f_single, pi=p_single)
+    pearson, slope = metrics.two_points_correlation(fij=f_double,pij=p_double,fi=f_single, pi=p_single)
     
     epochs = 0   
 
@@ -66,11 +51,9 @@ def train_graph(chains : torch.Tensor,
             ascii="-#",
             bar_format="{desc} {percentage:.2f}%[{bar}] Pearson: {n:.3f}/{total_fmt} [{elapsed}]"
         )
-        pbar.set_description(f"Epochs: {epochs} - train LL: {log_likelihood:.2f}")
+        pbar.set_description(f"Epochs: {epochs:3f} - Gap avg freq: {p_single[:,0].mean():.3f} - train LL: {log_likelihood:.2f}")
 
-    while not halt_condition(epochs, pearson, slope, target_pearson=target_pearson):
-        params_prev = {key: value.clone() for key, value in dataset.params.items()}
-
+    while epochs < max_epochs:
         dataset.params = algo.update_params(
             fi=f_single,
             fij=f_double,
@@ -81,23 +64,24 @@ def train_graph(chains : torch.Tensor,
             lr=0.05,
         )
 
-
         # Update the Markov chains
         chains = algo.gibbs_sampling(chains=chains, 
                                         params=dataset.params)
 
         epochs += 1
-        p_single = algo.get_single_point_freq(mat=chains)            
-        p_double = algo.get_two_point_freq(mat=chains)
+        p_single, p_double = algo.calc_freq(mat=chains)            
 
-        pearson, slope = algo.two_points_correlation(fij=f_double, pij=p_double, fi=f_single, pi=p_single)
+        pearson, slope = metrics.two_points_correlation(fij=f_double, pij=p_double, fi=f_single, pi=p_single)
         logZ = (torch.logsumexp(log_weights, dim=0) - torch.log(torch.tensor(len(chains), device=device, dtype=dtype))).item()
         log_likelihood = metrics.compute_log_likelihood(fi=f_single, fij=f_double, params=dataset.params, logZ=logZ)
 
         if progress_bar:
             pbar.n = min(max(0, float(pearson)), target_pearson)
-            pbar.set_description(f"Epochs: {epochs} - LL: {log_likelihood:.2f}")
+            pbar.set_description(f"Epochs: {epochs} - Gap avg freq: {p_single[:,0].mean():.3f} - LL: {log_likelihood:.2f}")
 
-        if epochs % 1 == 0:
-            utils.update_chains(chains_path=dataset.chains_file, chains=chains, alphabet=dataset.alphabet)
-            #utils.save_params(params_file=dataset.params_file, params=dataset.params, mask=dataset.mask, alphabet=dataset.mask)
+        if epochs % 5 == 0:
+            utils.chains_to_fasta(chains_path=dataset.chains_file, chains=chains, alphabet=dataset.alphabet)
+            utils.save_params(params_file=dataset.params_file, params=dataset.params)
+
+    print("\n")
+    return chains
