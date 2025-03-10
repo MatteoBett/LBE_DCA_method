@@ -81,9 +81,7 @@ class DatasetDCA(Dataset):
         return one_hot(chains, device=self.device, dtype=torch.float32)
 
     def get_indels_info(self):
-        new = []
-        for seq in np.matrix(self.msa).T.tolist():
-            new.append(list(seq))
+        new = np.matrix([list(elt) for elt in self.msa]).T.tolist()
 
         count_gaps = {index : col.count('-') + col.count('*') for index, col in enumerate(new)}
         mean = np.mean(list(count_gaps.values()))

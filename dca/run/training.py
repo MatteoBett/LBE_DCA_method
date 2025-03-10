@@ -95,7 +95,7 @@ def train_graph(chains : torch.Tensor,
         )
         pbar.set_description(f"Epochs: {epochs:3f} - Gap avg freq: {p_single[:,0].mean():.3f} - train LL: {log_likelihood:.2f}")
 
-    while epochs < max_epochs:
+    while dataset['gaps_lr'] > 0.00001:
         dataset.params = algo.update_params(
             fi=f_single,
             fij=f_double,
