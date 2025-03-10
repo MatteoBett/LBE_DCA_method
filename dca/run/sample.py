@@ -19,52 +19,7 @@ import dca.tools.utils as utils
 import dca.dataset.loader as loader
 import dca.stats.metrics as metrics
 
-def get_target_gap_distribution(frac_target : float, 
-                                data_distrib : torch.Tensor, 
-                                distrib : torch.Tensor, 
-                                passed : list = []) -> torch.Tensor:
-    """ Determines the target frequency distribution of gaps given an overall mean """
-    if frac_target <= 0:
-        return distrib
 
-    else:
-        for index, val in enumerate(data_distrib):
-            target_val = val*(frac_target/data_distrib.mean())
-            if target_val > 1 and index not in passed:
-                target_val = 1
-                passed.append(index)
-            
-            new_val = distrib[index] + target_val
-            if new_val > 1:
-                passed.append(index)
-                distrib[index] = 1
-            else:
-                distrib[index] = new_val
-
-        unused_frac = frac_target-distrib.mean()
-        return get_target_gap_distribution(frac_target=unused_frac,
-                                           data_distrib=data_distrib,
-                                           distrib=distrib,
-                                           passed=passed)
-
-
-def compute_gap_gradient(target_dist : torch.Tensor,
-                         dist_sample : torch.Tensor,
-                         params : Dict[str, torch.Tensor],
-                         device : str = 'cuda:0'
-                         ) -> Dict[str, torch.Tensor]:
-    """
-    Computes the gradient of the bias applied to the gaps frequency and adjust it 
-    toward a target distribution of gaps corresponding to a mean frequency of gaps in the sequence.
-    """ 
-    target_dist = target_dist.to(device=device)
-    dist_sample = dist_sample.to(device=device)
-    loss = target_dist - dist_sample
-
-    new_bias = params["gaps_lr"] * loss # positive result
-    params["gaps_bias"][:, 0] += new_bias[:, 0]
-    params["fields"][:,0] += params["gaps_bias"][:,0]
-    return params, loss.max().item()
 
 def main(infile_path : str,
          sample_file: str,
@@ -101,13 +56,6 @@ def main(infile_path : str,
 
     f_single, f_double = algo.calc_freq(mat=dataset.mat)
 
-    fi_target_gap_distribution = f_single[:, 0].cpu()
-    target_gap_distribution = torch.zeros((len(fi_target_gap_distribution), 1), dtype=torch.float32).cpu()
-    target_gap_distribution = get_target_gap_distribution(frac_target=gaps_fraction, 
-                                                            data_distrib=fi_target_gap_distribution, 
-                                                            distrib=target_gap_distribution)
-    
-    print("Targetted average gap frequency :", target_gap_distribution.mean().item())
     results_sampling = {
         "nsweeps" : [],
         "pearson" : [],
@@ -124,21 +72,15 @@ def main(infile_path : str,
         bar_format="{desc} {percentage:.2f}%[{bar}] Pearson: {n:.3f}/{total_fmt} [{elapsed}]"
     )  
 
-    loss_list = []
     for i in range(nmix * mixing_time):
-        samples = algo.gibbs_sampling(chains=samples, params=params, nsweeps=1, beta=beta)
+        samples, params = algo.gibbs_sampling(chains=samples, params=params, nsweeps=1, beta=beta)
         p_single, p_double = algo.calc_freq(mat=samples)
-
-        if bias_flag :
-            params, loss = compute_gap_gradient(target_gap_distribution, p_single[:, 0], params)
-            
     
         pearson, slope = metrics.two_points_correlation(fi=f_single, pi=p_single, fij=f_double, pij=p_double)
         results_sampling["nsweeps"].append(i)
         results_sampling["pearson"].append(pearson)
         results_sampling["slope"].append(slope)
         pbar.set_description(f"Step: {i} - Gap avg freq: {p_single[:,0].mean():.3f}")
-        loss_list.append(loss)
         
     pbar.close()
 

@@ -22,7 +22,9 @@ def main(infile_path : str,
          chains_file : str,
          params_file : str,
          target_pearson : float,
-         nchains : int = 1000
+         gaps_fraction : float,
+         bias_flag : bool = False,
+         nchains : int = 5000
          ):
     """ 
     Main function running the Direct Coupling Analysis.
@@ -44,6 +46,8 @@ def main(infile_path : str,
         f_double=f_double,
         p_single=p_single,
         p_double=p_double,
+        gaps_fraction=gaps_fraction,
+        bias_flag=bias_flag,
         target_pearson=target_pearson
     )
 
@@ -55,6 +59,8 @@ def begin_training(chains : torch.Tensor,
                    p_single : torch.Tensor,
                    p_double : torch.Tensor,
                    target_pearson : float,
+                   gaps_fraction : float,
+                   bias_flag : bool = False
                    ):
     
     device = f_single.device
@@ -71,6 +77,8 @@ def begin_training(chains : torch.Tensor,
                                     f_double=f_double,
                                     target_pearson=target_pearson,
                                     log_weights=log_weights,
+                                    gaps_fraction=gaps_fraction,
+                                    bias_flag=bias_flag
                                     )
     
     p_single, p_double = algo.calc_freq(mat=chains)
