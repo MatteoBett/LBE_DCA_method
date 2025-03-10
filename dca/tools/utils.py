@@ -1,7 +1,7 @@
 #########################################################
 #                        std Lib                        #
 #########################################################
-from typing import Dict
+from typing import Dict, List
 import json
 #########################################################
 #                      Dependencies                     #
@@ -14,9 +14,10 @@ import pandas as pd
 #########################################################
 
 
-def update_chains(chains_path  : str,
+def chains_to_fasta(chains_path  : str,
                   chains : torch.Tensor,
-                  alphabet : str):
+                  alphabet : str,
+                  headers : List[str] | None = None):
     """ Update the chains sampled during the DCA """
 
     chains=chains.argmax(dim=-1)
@@ -26,62 +27,30 @@ def update_chains(chains_path  : str,
 
     with open(chains_path, 'w') as chains_file:
         for index, chain in enumerate(chains):
-            chains_file.write(f">chain_{index}\n")
+            if headers is not None:
+                chains_file.write(f"{headers[index]}\n")
+            else:
+                chains_file.write(f">chain_{index}\n")
             for elt in chain:
                 chains_file.write(f"{alphabet[elt]}")
             chains_file.write('\n')
     
 
 def save_params(params_file : str,
-                params : Dict[str, torch.Tensor],
-                mask: torch.Tensor,
-                alphabet : str):
+                params : Dict[str, torch.Tensor]):
     """
     Saves the parameters of the model in a file."
     """
-    mask = mask.cpu().numpy()
-    params = {k : v.cpu().numpy() for k, v in params.items()}
+    with open(params_file, 'w') as writer:
+        json.dump({k : v.cpu().tolist() for k, v in params.items()}, writer)
     
+def load_params(params_file : str, 
+                device : str = 'cuda:0',
+                dtype : torch.dtype = torch.float32):
+    """
+    Load the saved parameters of a previously trained model
+    """
+    with open(params_file) as trained_model:
+        params = json.loads(trained_model.read())
     
-    L, q, *_ = mask.shape
-    idx0 = np.arange(L * q).reshape(L * q) // q
-    idx1 = np.arange(L * q).reshape(L * q) % q
-    idx1_aa = np.vectorize(lambda n, tokens : tokens[n], excluded=["tokens"])(idx1, alphabet).astype(str)
-    df_h = pd.DataFrame(
-        {
-            "param" : np.full(L * q, "h"),
-            "index" : idx0,
-            "nuc" : idx1_aa,
-            "val" : params["bias"].flatten(),
-        }
-    )
-    
-    maskt = mask.transpose(0, 2, 1, 3) # Transpose mask and coupling matrix from (L, q, L, q) to (L, L, q, q)
-    Jt = params["coupling_matrix"].transpose(0, 2, 1, 3)
-    idx0, idx1, idx2, idx3 = maskt.nonzero()
-    idx2_aa = np.vectorize(lambda n, tokens : tokens[n], excluded=["tokens"])(idx2, alphabet).astype(str)
-    idx3_aa = np.vectorize(lambda n, tokens : tokens[n], excluded=["tokens"])(idx3, alphabet).astype(str)
-    J_val = Jt[idx0, idx1, idx2, idx3]
-    df_J = pd.DataFrame(
-        {
-            "param" : np.full(len(J_val), "J").tolist(),
-            "idx0" : idx0,
-            "idx1" : idx1,
-            "idx2" : idx2_aa,
-            "idx3" : idx3_aa,
-            "val" : J_val,
-        }
-    )
-
-    df_b = pd.DataFrame(
-        {
-            "param" : np.full(L, "b"),
-            "index" : np.arange(L, dtype=np.int32),
-            "val" : params["all_params"].flatten(),
-        }
-    )
-    
-    df_J.to_csv(params_file, sep=" ", header=False, index=False)
-    df_h.to_csv(params_file, sep=" ", header=False, index=False, mode="a")
-    df_b.to_csv(params_file, sep=" ", header=False, index=False, mode='a')
-    
+    return {k : torch.tensor(v, device=device, dtype=dtype) for k,v in params.items()}

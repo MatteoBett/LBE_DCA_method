@@ -1,7 +1,7 @@
 #########################################################
 #                        std Lib                        #
 #########################################################
-from typing import Dict
+from typing import Dict, Tuple
 
 #########################################################
 #                      Dependencies                     #
@@ -24,35 +24,90 @@ def compute_log_likelihood(
     return - mean_energy_data - logZ
 
 
-def compute_Dkl(fij: torch.Tensor,
-                pij: torch.Tensor
-                ) -> torch.Tensor:
+def _get_slope(x, y):
+    """ 
+    Get the slope of the curve obtained from the points resulting
+    from the association of the x and y input vectors.
     """
-    Computes the Kullback-Leibler divergence matrix of all the possible couplings.
+    n = len(x)
+    num = n * (x @ y) - y.sum() * x.sum()
+    den = n * (x @ x) - torch.square(x.sum())
+    return torch.abs(num / den)
+
+
+def extract_Cij_from_freq(
+                        fij: torch.Tensor,
+                        pij: torch.Tensor,
+                        fi: torch.Tensor,
+                        pi: torch.Tensor,
+                        mask: torch.Tensor | None = None,
+                        ) -> Tuple[float, float]:
     """
-    L = fij.shape[0]
-    Dkl = fij * (torch.log(fij) - torch.log(pij)) + (1. - fij) * (torch.log(1. - fij) - torch.log(1. - pij))
-    Dkl[torch.arange(L), :, torch.arange(L), :] = -float("inf")
+    Extracts the lower triangular part of the covariance matrices of the data and chains starting from the frequencies.
+    """
+    L = fi.shape[0]
+        
+    # Compute the covariance matrices
+    cov_data = fij - torch.einsum('ij,kl->ijkl', fi, fi)
+    cov_chains = pij - torch.einsum('ij,kl->ijkl', pi, pi)
     
-    return Dkl
-
-
-def activate_graph(
-    mask: torch.Tensor,
-    fij: torch.Tensor,
-    pij: torch.Tensor,
-    nactivate: int,
-) -> torch.Tensor: 
-    """
-    Updates the interaction graph by activating a maximum of nactivate couplings, based on the
-    Kullback-Leibler divergence between the two points frequency for the generated chains
-    respect to the training data.
-    """
-    Dkl = compute_Dkl(fij=fij, pij=pij)
-    Dkl_flat_sorted, _ = torch.sort(Dkl.flatten(), descending=True)
-
-    Dkl_th = Dkl_flat_sorted[2 * nactivate]
-    mask = torch.where(Dkl > Dkl_th, torch.tensor(1, device=Dkl.device, dtype=Dkl.dtype), mask)
+    # Only use a subset of couplings if a mask is provided
+    if mask is not None:
+        cov_data = torch.where(mask, cov_data, torch.tensor(0.0, device=cov_data.device, dtype=cov_data.dtype))
+        cov_chains = torch.where(mask, cov_chains, torch.tensor(0.0, device=cov_chains.device, dtype=cov_chains.dtype))
     
-    return mask
 
+    # Extract only the entries of half the matrix and out of the diagonal blocks
+    idx_row, idx_col = torch.tril_indices(L, L, offset=-1)
+    fij_extract = cov_data[idx_row, :, idx_col, :].reshape(-1)
+    pij_extract = cov_chains[idx_row, :, idx_col, :].reshape(-1)
+    return fij_extract, pij_extract
+
+
+def two_points_correlation(fij : torch.Tensor, 
+                           pij : torch.Tensor, 
+                           fi : torch.Tensor, 
+                           pi : torch.Tensor,
+                           mask: torch.Tensor | None = None
+                           ):
+    """
+    Computes the Pearson coefficient and the slope between the two-point frequencies of data and chains.
+    """
+    fij_extract, pij_extract = extract_Cij_from_freq(fij, pij, fi, pi, mask)
+    stack = torch.stack([fij_extract, pij_extract])
+    pearson = torch.corrcoef(stack)[0, 1].item()
+    
+    slope = _get_slope(fij_extract, pij_extract).item()
+    
+    return pearson, slope
+
+
+def _compute_energy_sequence(
+    x: torch.Tensor,
+    params: Dict[str, torch.Tensor],
+) -> torch.Tensor:
+    L, q = params["fields"].shape
+    x_oh = x.ravel()
+    
+    bias_oh = params["fields"].ravel()
+    couplings_oh = params["couplings"].view(L * q, L * q)
+
+    fields = - x_oh @ bias_oh
+    couplings = - 0.5 * x_oh @ (couplings_oh @ x_oh)
+
+    energy = fields + couplings
+    return energy
+
+
+def compute_energy(
+    X: torch.Tensor,
+    params: Dict[str, torch.Tensor],
+) -> torch.Tensor:
+    """
+    Compute the DCA energy of the sequences in X.
+    """
+    
+    if X.dim() != 3:
+        raise ValueError("Input tensor X must be 3-dimensional of size (_, L, q)")
+
+    return torch.vmap(_compute_energy_sequence, in_dims=(0, None))(X, params)
